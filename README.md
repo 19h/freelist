@@ -9,10 +9,10 @@ Outsource of Node's internal FreeList module (originally by Ryan Dahl)
 	me.free(Number(101));
 
 	me.alloc(123)
-	// 101
+	// 100
 
 	me.alloc(123)
-	// 100
+	// 101
 
 	me.alloc(123)
 	// 123
