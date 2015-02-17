@@ -1,4 +1,3 @@
-
 var FreeList = (function() {
 	function FreeList(name, max, constructor) {
 		this.name = name;
