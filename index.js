@@ -1,42 +1,47 @@
-var assert = console.assert ? console.assert : (function(a, b) {
-	return a || (function() {
-		throw new Error(b);
-	})();
-});
+// Copyright Joyent, Inc. and other Node contributors.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the
+// following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+// USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-var FreeList = (function() {
-	var __slice = [].slice;
+// This is a free list to avoid creating so many of the same object.
+exports.FreeList = function(name, max, constructor) {
+  this.name = name;
+  this.constructor = constructor;
+  this.max = max;
+  this.list = [];
+};
 
-	function FreeList(name, max, constructor) {
-		this.name = name;
-		this.max = max;
-		this.constructor = constructor != null ? constructor : function() {};
-		this.list = [];
-	}
 
-	FreeList.prototype.alloc = function() {
-		var args = 1 <= arguments.length ? __slice.call(arguments, 0) : [];
+exports.FreeList.prototype.alloc = function() {
+  //debug("alloc " + this.name + " " + this.list.length);
+  return this.list.length ? this.list.shift() :
+                            this.constructor.apply(this, arguments);
+};
 
-		if (this.list.length) {
-			return this.list.shift();
-		} else {
-			return this.constructor.apply(this, args);
-		}
-	};
 
-	FreeList.prototype.free = function(obj) {
-		if (this.list.length < this.max) {
-			this.list.push(obj);
-			return true;
-		} else {
-			return false;
-		}
-	};
+exports.FreeList.prototype.free = function(obj) {
+  //debug("free " + this.name + " " + this.list.length);
+  if (this.list.length < this.max) {
+    this.list.push(obj);
+    return true;
+  }
+  return false;
+};
 
-	return FreeList;
-})();
-
-// remain backward compatible
-FreeList.FreeList = FreeList;
-
-module.exports = FreeList
+module.exports = exports.FreeList.FreeList = exports.FreeList;
