@@ -2,6 +2,8 @@
 
 A small, dependency-free CommonJS module for bounded FIFO reuse of JavaScript
 values. Originally extracted from Node.js's internal FreeList, by Ryan Dahl.
+Includes cache occupancy inspection, capacity changes, trimming, clearing, and
+transfer of cached values back to the caller.
 
 ```sh
 npm install freelist
@@ -69,6 +71,46 @@ Application code is responsible for clearing sensitive data and releasing
 resources when a value is no longer needed, including when `free()` returns
 `false`.
 
+### Cache management
+
+| Member | Result | Effect |
+| --- | --- | --- |
+| `pool.size` | Number | Read-only count of cached values; excludes checked-out values. |
+| `pool.clear()` | Number removed | Empties the cache without returning or disposing of its values. |
+| `pool.drain()` | Array of removed values | Empties the cache and returns its values in FIFO order. |
+| `pool.trim(size)` | Array of removed values | Keeps at most `size` entries, retaining the oldest ones. Capacity stays unchanged. |
+| `pool.resize(max)` | Array of removed values | Changes capacity and evicts excess entries, retaining the oldest ones. |
+
+`trim()` and `resize()` use the constructor's numeric range and error types.
+Invalid arguments leave both capacity and contents unchanged. Trimming above
+the current occupancy has no effect. Growing capacity creates no values and
+preallocates no storage. Resizing to zero empties the cache and disables caching
+until capacity is increased.
+
+Returned arrays are independent of the pool's internal array; their elements
+are the original values, not clones. Removed entries appear in their original
+FIFO order. Every management operation preserves the internal array's identity,
+does not invoke the factory, and leaves checked-out values untouched. `clear()`,
+`drain()`, and `trim()` leave capacity unchanged.
+
+```js
+var FreeList = require('freelist');
+var cache = new FreeList('numbers', 3, Number);
+cache.free(10);
+cache.free(20);
+cache.free(30);
+
+console.log(cache.size);       // 3
+console.log(cache.resize(2));  // [30]
+console.log(cache.drain());    // [10, 20]
+console.log(cache.size);       // 0
+```
+
+Use `drain()`, `trim()`, or `resize()` when the caller needs to explicitly release
+resources held by removed values. Cleanup is performed by the caller after the
+operation returns; it is not an automatic pool callback. `clear()` only removes
+the pool's references and does not guarantee immediate garbage collection.
+
 ### Compatibility fields and exports
 
 Both imports return the same constructor:
@@ -87,7 +129,8 @@ The historical public fields remain available:
 | `pool.constructor` | The factory function, **not** the `FreeList` class. |
 | `pool.list` | The actual array of cached values, in allocation order. |
 
-Treat `max`, `constructor`, and `list` as inspection-only fields. Direct mutation
+Use `resize()` to change capacity. Treat `max`, `constructor`, and `list` as
+inspection-only fields. Direct mutation
 bypasses the constructor's validation and can invalidate the documented capacity
 and FIFO guarantees. The array's identity is preserved across allocations and
 frees.
@@ -105,6 +148,12 @@ usual dynamic-array model. Cache misses add the factory's execution cost. These
 are algorithmic estimates, not JavaScript engine latency guarantees. The pool
 holds O(n) references in addition to the memory retained by the values themselves.
 
+Reading `size` takes O(1) time and space. Under the same array model, `drain()`
+takes O(n) time and O(n) additional space for its result; `trim()` and `resize()`
+take O(k + 1) time and additional space for `k` removed values. `clear()` requires
+at most O(n) reference removal and no result array. These bounds exclude garbage
+collection and memory retained by the values themselves.
+
 The array-based implementation preserves the public `list` interface and FIFO
 behavior. Cached objects remain strongly referenced until allocated, removed by
 application code, or the pool itself becomes unreachable. This module provides
@@ -121,7 +170,8 @@ npm test
 
 Tests cover both exports, FIFO reuse, bounded capacity, callback context and
 arguments, all value types, exception propagation, independent pools, constructor
-validation, and 40000 deterministic operations against a bounded FIFO model.
+validation, all cache-management operations, and 50000 deterministic operations
+against bounded FIFO models.
 
 ## License
 

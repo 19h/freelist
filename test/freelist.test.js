@@ -203,3 +203,165 @@ test('calling without new fails without modifying the supplied receiver', () => 
     assert.deepEqual(receiver, {});
     assert.throws(() => FreeList('invalid', 1), TypeError);
 });
+
+test('size tracks cached values and cannot be assigned', () => {
+    const pool = new FreeList('size', 2, () => 'created');
+
+    assert.equal(pool.size, 0);
+    pool.alloc();
+    assert.equal(pool.size, 0);
+    pool.free(undefined);
+    pool.free('second');
+    assert.equal(pool.size, 2);
+    assert.equal(pool.free('rejected'), false);
+    assert.equal(pool.size, 2);
+    pool.alloc();
+    assert.equal(pool.size, 1);
+    assert.throws(() => { pool.size = 10; }, TypeError);
+    assert.equal(pool.size, 1);
+});
+
+test('clear releases cached references while preserving capacity and array identity', () => {
+    const pool = new FreeList('clear', 2, () => 'created');
+    const list = pool.list;
+    pool.free({});
+    pool.free(undefined);
+
+    assert.equal(pool.clear(), 2);
+    assert.equal(pool.size, 0);
+    assert.equal(pool.list, list);
+    assert.equal(pool.max, 2);
+    assert.equal(pool.clear(), 0);
+    assert.equal(pool.alloc(), 'created');
+    assert.equal(pool.free('reused'), true);
+});
+
+test('drain transfers values in FIFO order and leaves an independent result array', () => {
+    const pool = new FreeList('drain', 3);
+    const list = pool.list;
+    const object = {};
+    pool.free(undefined);
+    pool.free(object);
+    pool.free(object);
+
+    const drained = pool.drain();
+    assert.deepEqual(drained, [undefined, object, object]);
+    assert.notEqual(drained, list);
+    assert.equal(pool.list, list);
+    assert.equal(pool.size, 0);
+    assert.equal(pool.max, 3);
+    pool.free('new');
+    assert.deepEqual(drained, [undefined, object, object]);
+    assert.deepEqual(pool.drain(), ['new']);
+    assert.deepEqual(pool.drain(), []);
+});
+
+test('trim keeps the oldest entries and transfers the rest without changing capacity', () => {
+    const pool = new FreeList('trim', 4);
+    const list = pool.list;
+    for (const value of ['a', 'b', 'c', 'd']) pool.free(value);
+
+    assert.deepEqual(pool.trim(2), ['c', 'd']);
+    assert.equal(pool.list, list);
+    assert.equal(pool.size, 2);
+    assert.equal(pool.max, 4);
+    assert.deepEqual(pool.trim(2), []);
+    assert.deepEqual(pool.trim(0xFFFFFFFF), []);
+    assert.equal(pool.alloc(), 'a');
+    assert.equal(pool.alloc(), 'b');
+    pool.free('e');
+    assert.deepEqual(pool.trim(0), ['e']);
+    assert.equal(pool.size, 0);
+});
+
+test('resize shrinks, grows, and disables caching without invoking the factory', () => {
+    let calls = 0;
+    const pool = new FreeList('resize', 3, () => ++calls);
+    const list = pool.list;
+    for (const value of ['a', 'b', 'c']) pool.free(value);
+
+    assert.deepEqual(pool.resize(1), ['b', 'c']);
+    assert.equal(pool.max, 1);
+    assert.equal(pool.size, 1);
+    assert.equal(pool.free('full'), false);
+    assert.deepEqual(pool.resize(4), []);
+    assert.equal(pool.max, 4);
+    assert.equal(pool.free('d'), true);
+    assert.deepEqual(pool.resize(4), []);
+    assert.deepEqual(pool.resize(0), ['a', 'd']);
+    assert.equal(pool.free('disabled'), false);
+    assert.equal(calls, 0);
+    assert.equal(pool.alloc(), 1);
+    assert.deepEqual(pool.resize(0xFFFFFFFF), []);
+    assert.equal(pool.size, 0);
+    assert.equal(pool.list, list);
+});
+
+test('trim and resize validate inputs before changing any pool state', () => {
+    const invalid = [
+        [undefined, TypeError], [null, TypeError], ['1', TypeError],
+        [true, TypeError], [{}, TypeError], [1n, TypeError],
+        [NaN, RangeError], [Infinity, RangeError], [-Infinity, RangeError],
+        [-1, RangeError], [0.5, RangeError], [0x100000000, RangeError]
+    ];
+
+    for (const method of ['trim', 'resize']) {
+        for (const [value, errorType] of invalid) {
+            const pool = new FreeList('invalid', 2);
+            const list = pool.list;
+            pool.free('a');
+            pool.free('b');
+
+            assert.throws(() => pool[method](value), errorType);
+            assert.equal(pool.list, list);
+            assert.deepEqual(pool.list, ['a', 'b']);
+            assert.equal(pool.max, 2);
+        }
+    }
+});
+
+test('cache-management operations match a deterministic FIFO model', () => {
+    const pool = new FreeList('management', 7, value => value);
+    const list = pool.list;
+    const expected = [];
+    let capacity = 7;
+    let state = 987654321;
+
+    for (let step = 0; step < 10000; step += 1) {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        const target = state % 16;
+
+        switch (state % 7) {
+            case 0: {
+                const accepted = expected.length < capacity;
+                assert.equal(pool.free(step), accepted);
+                if (accepted) expected.push(step);
+                break;
+            }
+            case 1:
+                assert.equal(pool.alloc(-step), expected.length ? expected.shift() : -step);
+                break;
+            case 2:
+                assert.deepEqual(pool.trim(target), expected.splice(target));
+                break;
+            case 3:
+                capacity = target;
+                assert.deepEqual(pool.resize(target), expected.splice(target));
+                break;
+            case 4:
+                assert.deepEqual(pool.drain(), expected.splice(0));
+                break;
+            case 5:
+                assert.equal(pool.clear(), expected.length);
+                expected.length = 0;
+                break;
+            default:
+                assert.equal(pool.size, expected.length);
+        }
+
+        assert.equal(pool.list, list);
+        assert.equal(pool.size, expected.length);
+        assert.equal(pool.max, capacity);
+        assert.deepEqual(pool.list, expected);
+    }
+});

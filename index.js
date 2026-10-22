@@ -5,6 +5,15 @@ var MAX_CAPACITY = 0xFFFFFFFF;
 
 function noop() {}
 
+function validateCapacity(value, name) {
+    if (typeof value !== 'number') {
+        throw new TypeError(name + ' must be a number');
+    }
+    if (value < 0 || value > MAX_CAPACITY || Math.floor(value) !== value) {
+        throw new RangeError(name + ' must be an integer between 0 and 4294967295');
+    }
+}
+
 /**
  * Create a bounded, first-in-first-out pool of reusable values.
  *
@@ -25,12 +34,7 @@ function FreeList(name, max, factory) {
     if (!(this instanceof FreeList)) {
         throw new TypeError('FreeList must be called with new');
     }
-    if (typeof max !== 'number') {
-        throw new TypeError('max must be a number');
-    }
-    if (max < 0 || max > MAX_CAPACITY || Math.floor(max) !== max) {
-        throw new RangeError('max must be an integer between 0 and 4294967295');
-    }
+    validateCapacity(max, 'max');
     if (factory != null && typeof factory !== 'function') {
         throw new TypeError('factory must be a function');
     }
@@ -75,6 +79,71 @@ FreeList.prototype.free = function (value) {
     }
     this.list.push(value);
     return true;
+};
+
+/**
+ * Number of currently cached values, excluding checked-out values.
+ * @name FreeList#size
+ * @type {number}
+ * @readonly
+ */
+Object.defineProperty(FreeList.prototype, 'size', {
+    get: function () {
+        return this.list.length;
+    }
+});
+
+/**
+ * Remove all cached references without disposing of the values.
+ * The cache array's identity and the configured capacity are preserved.
+ *
+ * @returns {number} Number of removed values.
+ */
+FreeList.prototype.clear = function () {
+    var removed = this.list.length;
+    this.list.length = 0;
+    return removed;
+};
+
+/**
+ * Transfer all cached values to the caller in FIFO order, emptying the cache.
+ * The caller may reuse or dispose of the returned values.
+ *
+ * @returns {Array} Removed values in allocation order.
+ */
+FreeList.prototype.drain = function () {
+    return this.list.splice(0);
+};
+
+/**
+ * Retain at most size cached values, preserving the oldest entries.
+ * Does not change the configured capacity or dispose of removed values.
+ * Validation completes before the cache is modified.
+ *
+ * @param {number} size Non-negative integer, at most 4294967295.
+ * @returns {Array} Removed newest entries, in their original FIFO order.
+ * @throws {TypeError} If size is not a number.
+ * @throws {RangeError} If size is not an integer within the supported range.
+ */
+FreeList.prototype.trim = function (size) {
+    validateCapacity(size, 'size');
+    return this.list.splice(size);
+};
+
+/**
+ * Change capacity, retaining the oldest values when shrinking the cache.
+ * Increasing capacity does not create values or preallocate storage.
+ * Validation completes before the capacity or cache is modified.
+ *
+ * @param {number} max New capacity, with the constructor's numeric constraints.
+ * @returns {Array} Evicted values in their original FIFO order.
+ * @throws {TypeError} If max is not a number.
+ * @throws {RangeError} If max is not an integer within the supported range.
+ */
+FreeList.prototype.resize = function (max) {
+    validateCapacity(max, 'max');
+    this.max = max;
+    return this.list.splice(max);
 };
 
 // Support both require('freelist') and require('freelist').FreeList.
